@@ -157,6 +157,7 @@ tbody tr:hover{background:#f5e6c8}
   <button onclick="irA('inventario',this)">📦 Inventario</button>
   <button onclick="irA('reportes',this)">📊 Reportes</button>
   <button onclick="irA('finanzas',this)">💰 Finanzas</button>
+  <button onclick="irA('caja',this)">💵 Caja</button>
   <button onclick="irA('gastos',this)">📉 Gastos</button>
   <button onclick="irA('resumen',this)">📋 Resumen</button>
   <button onclick="irA('cierres',this)">📅 Cierres</button>
@@ -455,6 +456,33 @@ tbody tr:hover{background:#f5e6c8}
   </div>
 </section>
 
+<!-- ===================== CAJA DIARIA (ARQUEO) ===================== -->
+<section id="sec-caja" class="sec">
+  <div class="card">
+    <div class="card-header"><h2>💵 Arqueo de caja del día</h2>
+      <div class="ch-actions"><button class="btn btn-ghost btn-sm" onclick="exportArqueoCaja()">⬇ Descargar</button></div>
+    </div>
+    <div><label>Fecha del arqueo</label><input type="date" id="caja-fecha" onchange="renderCaja()"></div>
+    <div class="kpi-grid" id="kpi-caja" style="margin-top:14px"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>🏁 Saldo inicial del día</h2></div>
+    <div id="caja-saldo-inicial"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>⬆️ Ventas del día (efectivo)</h2></div>
+    <div id="caja-ventas"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>⬇️ Gastos del día (efectivo)</h2></div>
+    <div id="caja-gastos"></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>🧮 Resumen del arqueo</h2></div>
+    <div id="caja-resumen"></div>
+  </div>
+</section>
+
 <!-- ===================== GASTOS ===================== -->
 <section id="sec-gastos" class="sec">
   <div class="kpi-grid" id="kpi-gastos"></div>
@@ -579,6 +607,7 @@ tbody tr:hover{background:#f5e6c8}
   <button onclick="irA('inventario',this)"><span class="ic">📦</span>Stock</button>
   <button onclick="irA('reportes',this)"><span class="ic">📊</span>Reportes</button>
   <button onclick="irA('finanzas',this)"><span class="ic">💰</span>Finanzas</button>
+  <button onclick="irA('caja',this)"><span class="ic">💵</span>Caja</button>
   <button onclick="irA('gastos',this)"><span class="ic">📉</span>Gastos</button>
   <button onclick="irA('resumen',this)"><span class="ic">📋</span>Resumen</button>
   <button onclick="irA('cierres',this)"><span class="ic">📅</span>Cierres</button>
@@ -1470,8 +1499,55 @@ function verProducto(key){
       '<button class="btn btn-ghost btn-sm" onclick="guardarMinimo(\''+esc(key).replace(/'/g,"\\'")+'\')">Guardar</button></div>'+
       '<div class="sec-label">Movimientos</div>'+rows+
       '<div class="btn-row"><button class="btn btn-success btn-sm" onclick="abrirEntradaStock(\''+esc(key).replace(/'/g,"\\'")+'\')">➕ Entrada</button>'+
+      '<button class="btn btn-danger btn-sm" onclick="eliminarProducto(\''+esc(key).replace(/'/g,"\\'")+'\')">🗑 Eliminar</button>'+
       '<button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Cerrar</button></div>';
     abrirModal(html);
+  });
+}
+/* Elimina un producto del inventario. Protege los que tienen ventas reales en facturas:
+   borrarlos dejaría esas ventas sin costo y dañaría los reportes. Pensado para limpiar
+   productos fantasma creados por lecturas erradas de la IA. */
+function eliminarProducto(key){
+  var i=CACHE_INV.find(function(x){return x.key===key;}); if(!i)return;
+  var nombre=i.nombre||i.key;
+  return dbGetAll(STORE_FACTURAS).then(function(facturas){
+    /* buscar facturas que usen este producto */
+    var usadoEn=[];
+    facturas.forEach(function(f){
+      var lo_usa=(f.productos||[]).some(function(p){ return prodKey(p)===key; });
+      if(lo_usa)usadoEn.push(f);
+    });
+    if(usadoEn.length){
+      usadoEn.sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+      var listaF=usadoEn.slice(0,8).map(function(f){
+        return '<div class="mini-row" style="padding:5px 0;border-bottom:1px solid var(--crema2);font-size:.8rem"><span>'+fmtFecha(f.fecha)+' · N° '+esc(f.numero_factura||'—')+'</span><strong>'+fmtMoneda(f.total)+'</strong></div>';
+      }).join('');
+      abrirModal('<h3>⚠ No se puede eliminar</h3>'+
+        '<p style="font-size:.86rem;margin-bottom:10px">El producto <strong>'+esc(nombre)+'</strong> está usado en <strong>'+usadoEn.length+' factura(s)</strong>. Si lo borras, esas ventas quedarían sin costo y se dañarían tus reportes de utilidad.</p>'+
+        '<div class="sec-label">Facturas que lo usan'+(usadoEn.length>8?' (primeras 8)':'')+'</div>'+listaF+
+        '<p style="font-size:.78rem;color:var(--gris);margin-top:10px">Si este producto está errado, corrige primero el nombre en esas facturas (📄 Facturas → Editar). Cuando ya no lo use ninguna, podrás eliminarlo.</p>'+
+        '<div class="btn-row" style="margin-top:12px"><button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Entendido</button></div>');
+      return;
+    }
+    /* sin ventas: se puede borrar */
+    var stock=Number(i.stock)||0;
+    var aviso='¿Eliminar el producto "'+nombre+'"?';
+    if(stock>0) aviso+='\n\n⚠ ATENCIÓN: tiene '+stock+' unidad(es) en stock. Se perderá ese registro.';
+    aviso+='\n\nEsto no afecta ninguna factura (el producto no está usado en ninguna). Se borrarán también sus movimientos de inventario.';
+    if(!confirm(aviso))return;
+    /* borrar producto + sus movimientos de inventario */
+    return dbGetAll(STORE_MOVS).then(function(movs){
+      var suyos=movs.filter(function(m){ return m.prodKey===key; });
+      var ps=[dbDel(STORE_INVENTARIO,key)];
+      suyos.forEach(function(m){ ps.push(dbDel(STORE_MOVS,m.id)); });
+      return Promise.all(ps);
+    }).then(function(){
+      cerrarModal();
+      toast('Producto eliminado: '+nombre,'ok');
+      renderInventario(); renderInicio();
+    }).catch(function(e){
+      toast('No se pudo eliminar: '+(e&&e.message?e.message:'error'),'err');
+    });
   });
 }
 function guardarMinimo(key){
@@ -1550,10 +1626,20 @@ function descargar(nombre,contenido,mime){
   var url=URL.createObjectURL(blob); var a=el('a',{href:url,download:nombre}); document.body.appendChild(a); a.click();
   setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); },100);
 }
-/* helper: convierte filas a CSV y descarga con BOM para Excel */
+/* helper: convierte filas a CSV y descarga con BOM para Excel.
+   Usa punto y coma como separador y coma decimal, que es lo que Excel en español
+   espera; así el archivo abre en columnas correctas con doble clic. */
 function generarCSV(nombre,filas){
   if(!filas||filas.length<=1){ toast('No hay datos para ese rango','warn'); return; }
-  var csv=filas.map(function(f){ return f.map(function(c){ var s=String(c==null?'':c); return /[",;\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; }).join(','); }).join('\n');
+  var csv=filas.map(function(f){
+    return f.map(function(c){
+      if(c==null)return '';
+      /* números: coma decimal, sin separador de miles (Excel lo formatea después) */
+      if(typeof c==='number' && isFinite(c)) return String(c).replace('.',',');
+      var s=String(c);
+      return /[";\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+    }).join(';');
+  }).join('\r\n');
   descargar(nombre+'_'+hoyISO()+'.csv','\ufeff'+csv,'text/csv;charset=utf-8');
   toast('Reporte descargado','ok');
 }
@@ -2185,14 +2271,39 @@ function renderGastos(){
             '<span>'+medalla+esc(t.k)+'</span><span><strong>'+fmtMoneda(t.v)+'</strong> <span style="color:var(--gris)">('+pctTotal+'%)</span></span></div>'+
             '<div class="conf-bar"><i style="width:'+pctMax+'%;background:'+(i===0?'var(--rojo)':'var(--caramelo)')+'"></i></div></div>'; }).join('');
     }
-    /* detalle de salidas (últimas 30 del periodo) */
-    var det=egresos.sort(function(a,b){return b.ts-a.ts;}).slice(0,30);
-    gId('gastos-detalle').innerHTML=det.length?det.map(function(m){
-      var esProd=m.clase==='produccion';
-      return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
-        '<span>'+fmtFecha(m.fecha)+' · '+esc(m.categoria||'')+' '+(esProd?'<span class="badge" style="background:#dce8f5;color:#1a4a7a">producción</span>':'<span class="badge" style="background:#fde0dc;color:#7a1010">operativo</span>')+'<br><span style="font-size:.74rem;color:var(--gris)">'+esc(m.ref||'')+' · '+(m.cuenta==='caja'?'Caja':'Banco '+esc(m.banco||''))+'</span></span>'+
-        '<strong style="color:var(--rojo)">'+fmtMoneda(m.monto)+'</strong></div>';
-    }).join(''):'<p style="color:var(--gris);font-size:.84rem;text-align:center;padding:10px">Sin salidas registradas.</p>';
+    /* detalle de salidas agrupado por ORIGEN del dinero: caja aparte, cada banco aparte */
+    var porOrigen={}; /* {origen: {label, movs[], total}} */
+    egresos.forEach(function(m){
+      var key = (m.cuenta==='caja') ? '__caja__' : ('banco:'+(m.banco||'Sin especificar'));
+      if(!porOrigen[key]) porOrigen[key]={ label:(m.cuenta==='caja'?'💵 Caja':'🏦 '+(m.banco||'Sin especificar')), movs:[], total:0, esCaja:(m.cuenta==='caja') };
+      porOrigen[key].movs.push(m); porOrigen[key].total+=(Number(m.monto)||0);
+    });
+    /* orden: caja primero, luego bancos alfabéticamente */
+    var claves=Object.keys(porOrigen).sort(function(a,b){
+      if(a==='__caja__')return -1; if(b==='__caja__')return 1;
+      return porOrigen[a].label.localeCompare(porOrigen[b].label);
+    });
+    if(!claves.length){
+      gId('gastos-detalle').innerHTML='<p style="color:var(--gris);font-size:.84rem;text-align:center;padding:10px">Sin salidas registradas.</p>';
+    } else {
+      gId('gastos-detalle').innerHTML=claves.map(function(k){
+        var g=porOrigen[k];
+        var movsOrdenados=g.movs.sort(function(a,b){return (b.ts||0)-(a.ts||0);}).slice(0,30);
+        return '<div class="sec-label" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center">'+
+            '<span>'+esc(g.label)+'</span><strong style="color:var(--rojo)">'+fmtMoneda(g.total)+'</strong></div>'+
+          movsOrdenados.map(function(m){
+            var esProd=m.clase==='produccion';
+            return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
+              '<span>'+fmtFecha(m.fecha)+' · '+esc(m.categoria||'')+' '+(esProd?'<span class="badge" style="background:#dce8f5;color:#1a4a7a">producción</span>':'<span class="badge" style="background:#fde0dc;color:#7a1010">operativo</span>')+
+              '<br><span style="font-size:.74rem;color:var(--gris)">'+esc(m.ref||'')+'</span></span>'+
+              '<strong style="color:var(--rojo)">'+fmtMoneda(m.monto)+'</strong></div>';
+          }).join('')+
+          '<div class="mini-row" style="padding:9px 0;font-weight:700;border-top:2px solid var(--crema2)"><span>Subtotal '+esc(g.label)+' ('+g.movs.length+')</span>'+
+          '<strong style="color:var(--rojo)">'+fmtMoneda(g.total)+'</strong></div>';
+      }).join('')+
+      '<div class="mini-row" style="padding:12px 0;font-weight:700;border-top:3px solid var(--caramelo);margin-top:10px"><span style="font-size:.98rem">TOTAL SALIDAS</span>'+
+      '<strong style="color:var(--caramelo);font-size:1.08rem">'+fmtMoneda(totalFiltrado)+'</strong></div>';
+    }
   });
 }
 
@@ -2421,10 +2532,10 @@ function irA(sec,btn){
   document.querySelectorAll('nav.top button').forEach(function(b){ b.classList.remove('activo'); });
   document.querySelectorAll('nav.bottom button').forEach(function(b){ b.classList.remove('activo'); });
   /* marcar activos en ambos navs por el orden */
-  var orden=['inicio','escaneo','facturas','clientes','inventario','reportes','finanzas','gastos','resumen','cierres','config'];
+  var orden=['inicio','escaneo','facturas','clientes','inventario','reportes','finanzas','caja','gastos','resumen','cierres','config'];
   var idx=orden.indexOf(sec);
   if(idx>=0){ var tb=document.querySelectorAll('nav.top button')[idx]; if(tb)tb.classList.add('activo');
-    var ordenBot=['inicio','escaneo','facturas','clientes','inventario','reportes','finanzas','gastos','resumen','cierres','config'];
+    var ordenBot=['inicio','escaneo','facturas','clientes','inventario','reportes','finanzas','caja','gastos','resumen','cierres','config'];
     var ib=ordenBot.indexOf(sec); if(ib>=0){ var bb=document.querySelectorAll('nav.bottom button')[ib]; if(bb){ bb.classList.add('activo'); if(bb.scrollIntoView)try{bb.scrollIntoView({inline:'center',block:'nearest',behavior:'smooth'});}catch(e){} } } }
   window.scrollTo({top:0,behavior:'smooth'});
   /* render bajo demanda */
@@ -2434,6 +2545,7 @@ function irA(sec,btn){
   else if(sec==='inventario')renderInventario();
   else if(sec==='reportes')renderReportes();
   else if(sec==='finanzas')renderFinanzas();
+  else if(sec==='caja')renderCaja();
   else if(sec==='gastos')renderGastos();
   else if(sec==='resumen')renderResumen();
   else if(sec==='cierres')renderCierres();
@@ -2445,9 +2557,123 @@ function refrescarTodo(){
   if(SEC_ACTUAL==='inventario')renderInventario();
   if(SEC_ACTUAL==='reportes')renderReportes();
   if(SEC_ACTUAL==='finanzas')renderFinanzas();
+  if(SEC_ACTUAL==='caja')renderCaja();
   if(SEC_ACTUAL==='gastos')renderGastos();
   if(SEC_ACTUAL==='resumen')renderResumen();
   if(SEC_ACTUAL==='cierres')renderCierres();
+}
+
+/* ============================================================
+   CAJA DIARIA · ARQUEO
+   ============================================================
+   Saldo inicial (todo lo de caja hasta el día anterior, desde el último cierre)
+   + ventas del día en efectivo − gastos del día en efectivo = saldo del día.
+   Saldo general = saldo inicial + saldo del día → arranque del día siguiente. */
+function calcularArqueoCaja(fecha){
+  return Promise.all([dbGetAll(STORE_FINANZAS),dbGetAll(STORE_FACTURAS),obtenerUltimoCierre()]).then(function(r){
+    var movs=r[0], facturas=r[1], ultimoCierre=r[2];
+    var idsF={}; facturas.forEach(function(f){ idsF[f.id]=true; });
+    /* punto de arranque: día siguiente al último cierre (o desde siempre si no hay cierres) */
+    var desdeCierre = ultimoCierre ? diaSiguiente(ultimoCierre.fecha_hasta) : null;
+    var saldoBaseCierre = ultimoCierre ? (Number(ultimoCierre.saldo_final && ultimoCierre.saldo_final.caja)||0) : 0;
+    /* solo movimientos de caja válidos */
+    var mvCaja = movs.filter(function(m){
+      return m.cuenta==='caja' && !(m.facturaId && !idsF[m.facturaId]) && m.fecha;
+    });
+    /* saldo inicial del día = saldo del cierre + movimientos desde el cierre hasta el día ANTERIOR */
+    var saldoInicial = saldoBaseCierre;
+    mvCaja.forEach(function(m){
+      if(desdeCierre && m.fecha < desdeCierre) return; /* ya está dentro del saldo del cierre */
+      if(m.fecha >= fecha) return; /* es de hoy o futuro, no cuenta para el inicial */
+      saldoInicial += (m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);
+    });
+    /* movimientos del día exacto */
+    var delDia = mvCaja.filter(function(m){ return m.fecha===fecha; })
+      .sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+    var ventas = delDia.filter(function(m){ return m.tipo==='ingreso'; });
+    var gastos = delDia.filter(function(m){ return m.tipo==='egreso'; });
+    var totalVentas = ventas.reduce(function(s,m){ return s+(Number(m.monto)||0); },0);
+    var totalGastos = gastos.reduce(function(s,m){ return s+(Number(m.monto)||0); },0);
+    var saldoDia = totalVentas - totalGastos;
+    return {fecha:fecha, saldoInicial:saldoInicial, ventas:ventas, gastos:gastos,
+      totalVentas:totalVentas, totalGastos:totalGastos, saldoDia:saldoDia,
+      saldoGeneral:saldoInicial+saldoDia, desdeCierre:desdeCierre, ultimoCierre:ultimoCierre};
+  });
+}
+function renderCaja(){
+  var inp=gId('caja-fecha');
+  if(inp && !inp.value) inp.value=hoyISO();
+  var fecha=(inp&&inp.value)||hoyISO();
+  return calcularArqueoCaja(fecha).then(function(a){
+    window._arqueoActual=a;
+    gId('kpi-caja').innerHTML=
+      kpi(fmtMoneda(a.saldoInicial),'🏁 Saldo inicial','azul')+
+      kpi(fmtMoneda(a.totalVentas),'⬆️ Ventas del día','verde')+
+      kpi(fmtMoneda(a.totalGastos),'⬇️ Gastos del día','miel')+
+      kpi(fmtMoneda(a.saldoGeneral),'💵 Saldo general','destacado');
+    /* saldo inicial */
+    gId('caja-saldo-inicial').innerHTML=
+      '<p style="font-size:.78rem;color:var(--gris);margin-bottom:8px">Es lo que quedó en caja al cerrar el día anterior'+
+      (a.ultimoCierre?(', partiendo del cierre '+esc(a.ultimoCierre.id)+' ('+fmtMoneda(Number(a.ultimoCierre.saldo_final.caja)||0)+')'):'')+'.</p>'+
+      '<div class="mini-row" style="padding:10px 0;font-weight:700"><span>Saldo inicial del '+fmtFecha(a.fecha)+'</span>'+
+      '<strong style="color:var(--azul);font-size:1.05rem">'+fmtMoneda(a.saldoInicial)+'</strong></div>';
+    /* ventas del día, una por una */
+    gId('caja-ventas').innerHTML=a.ventas.length?(
+      a.ventas.map(function(m){
+        return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
+          '<span>⬆️ '+esc(m.ref||'Ingreso')+(m.cliente?'<br><span style="font-size:.74rem;color:var(--gris)">👤 '+esc(m.cliente)+'</span>':'')+'</span>'+
+          '<strong style="color:var(--verde)">'+fmtMoneda(m.monto)+'</strong></div>';
+      }).join('')+
+      '<div class="mini-row" style="padding:11px 0;font-weight:700;border-top:2px solid var(--crema2)"><span>Total ventas ('+a.ventas.length+')</span>'+
+      '<strong style="color:var(--verde);font-size:1.02rem">'+fmtMoneda(a.totalVentas)+'</strong></div>'
+    ):'<p style="color:var(--gris);font-size:.84rem;text-align:center;padding:10px">Sin ventas en efectivo este día.</p>';
+    /* gastos del día, uno por uno */
+    gId('caja-gastos').innerHTML=a.gastos.length?(
+      a.gastos.map(function(m){
+        return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
+          '<span>⬇️ '+esc(m.ref||'Salida')+'<br><span style="font-size:.74rem;color:var(--gris)">'+esc(m.categoria||'Sin rubro')+
+          (m.clase==='produccion'?' · producción':' · operativo')+'</span></span>'+
+          '<strong style="color:var(--rojo)">'+fmtMoneda(m.monto)+'</strong></div>';
+      }).join('')+
+      '<div class="mini-row" style="padding:11px 0;font-weight:700;border-top:2px solid var(--crema2)"><span>Total gastos ('+a.gastos.length+')</span>'+
+      '<strong style="color:var(--rojo);font-size:1.02rem">'+fmtMoneda(a.totalGastos)+'</strong></div>'
+    ):'<p style="color:var(--gris);font-size:.84rem;text-align:center;padding:10px">Sin gastos en efectivo este día.</p>';
+    /* resumen del arqueo */
+    gId('caja-resumen').innerHTML=
+      '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)"><span>⬆️ Entradas del día</span><strong style="color:var(--verde)">'+fmtMoneda(a.totalVentas)+'</strong></div>'+
+      '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)"><span>⬇️ Gastos del día</span><strong style="color:var(--rojo)">− '+fmtMoneda(a.totalGastos).replace(/^\$\s/,'$ ')+'</strong></div>'+
+      '<div class="mini-row" style="padding:10px 0;font-weight:700;border-bottom:2px solid var(--crema2)"><span>= Saldo del día</span>'+
+      '<strong style="color:'+(a.saldoDia>=0?'var(--verde)':'var(--rojo)')+'">'+fmtMoneda(a.saldoDia)+'</strong></div>'+
+      '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)"><span>🏁 Saldo inicial</span><strong>+ '+fmtMoneda(a.saldoInicial).replace(/^\$\s/,'$ ')+'</strong></div>'+
+      '<div class="mini-row" style="padding:13px 0;font-weight:700;border-top:2px solid var(--caramelo)"><span style="font-size:1rem">💵 SALDO GENERAL</span>'+
+      '<strong style="color:var(--caramelo);font-size:1.15rem">'+fmtMoneda(a.saldoGeneral)+'</strong></div>'+
+      '<p style="font-size:.76rem;color:var(--gris);margin-top:8px">Este es el saldo que debe haber físicamente en la caja al cerrar el día, y con el que arranca el día siguiente.</p>';
+  });
+}
+function exportArqueoCaja(){
+  var fecha=(gId('caja-fecha')&&gId('caja-fecha').value)||hoyISO();
+  return calcularArqueoCaja(fecha).then(function(a){
+    var filas=[['ARQUEO DE CAJA'],['Fecha',a.fecha],['Generado',hoyISO()],[]];
+    filas.push(['SALDO INICIAL DEL DÍA',a.saldoInicial]);
+    filas.push([]);
+    filas.push(['VENTAS DEL DÍA (EFECTIVO)']);
+    filas.push(['Detalle','Cliente','Monto']);
+    a.ventas.forEach(function(m){ filas.push([m.ref||'Ingreso',m.cliente||'',Number(m.monto)||0]); });
+    filas.push(['TOTAL VENTAS','',a.totalVentas]);
+    filas.push([]);
+    filas.push(['GASTOS DEL DÍA (EFECTIVO)']);
+    filas.push(['Detalle','Rubro','Clase','Monto']);
+    a.gastos.forEach(function(m){ filas.push([m.ref||'Salida',m.categoria||'',m.clase==='produccion'?'Producción':'Operativo',Number(m.monto)||0]); });
+    filas.push(['TOTAL GASTOS','','',a.totalGastos]);
+    filas.push([]);
+    filas.push(['RESUMEN DEL ARQUEO']);
+    filas.push(['Entradas del día',a.totalVentas]);
+    filas.push(['Gastos del día',a.totalGastos]);
+    filas.push(['Saldo del día (entradas - gastos)',a.saldoDia]);
+    filas.push(['Saldo inicial',a.saldoInicial]);
+    filas.push(['SALDO GENERAL (para el día siguiente)',a.saldoGeneral]);
+    generarCSV('arqueo_caja_'+a.fecha,filas);
+  });
 }
 
 /* ============================================================
@@ -2873,15 +3099,31 @@ function diagnosticoCosto(){
   });
 }
 
+/* lee un store de forma tolerante: si no existe o falla, devuelve [] en vez de tumbar el respaldo */
+function dbGetAllSeguro(store){
+  return new Promise(function(res){
+    try{
+      if(!DB || !DB.objectStoreNames.contains(store)){ console.warn('Store ausente en el respaldo:',store); res([]); return; }
+      dbGetAll(store).then(res).catch(function(e){ console.warn('Error leyendo store',store,e); res([]); });
+    }catch(e){ console.warn('Excepción leyendo store',store,e); res([]); }
+  });
+}
 function exportarBackup(){
-  Promise.all([dbGetAll(STORE_FACTURAS),dbGetAll(STORE_INVENTARIO),dbGetAll(STORE_CLIENTES),dbGetAll(STORE_MOVS),dbGetAll(STORE_FINANZAS),dbGetAll(STORE_CIERRES)]).then(function(r){
+  if(!DB){ toast('La base de datos no está lista. Recarga la página e intenta de nuevo.','err'); return Promise.resolve(); }
+  return Promise.all([dbGetAllSeguro(STORE_FACTURAS),dbGetAllSeguro(STORE_INVENTARIO),dbGetAllSeguro(STORE_CLIENTES),dbGetAllSeguro(STORE_MOVS),dbGetAllSeguro(STORE_FINANZAS),dbGetAllSeguro(STORE_CIERRES)]).then(function(r){
     var data={facturas:r[0],inventario:r[1],clientes:r[2],movimientos:r[3],finanzas:r[4],cierres:r[5],
       rubros_produccion:rubrosGuardados('produccion'),rubros_operativo:rubrosGuardados('operativo'),
       exportado:new Date().toISOString(),app:'FacturaAI',version:4};
+    /* aviso si el respaldo sale sospechosamente vacío */
+    var totalRegistros=r[0].length+r[1].length+r[2].length+r[3].length+r[4].length+r[5].length;
+    if(totalRegistros===0){ toast('⚠ El respaldo salió vacío. Revisa que tus datos estén cargados.','warn'); }
     descargar('respaldo_facturaai_'+hoyISO()+'.json',JSON.stringify(data,null,2),'application/json');
     localStorage.setItem('facturaai_ultimo_backup',Date.now());
-    gId('banner-backup').style.display='none';
-    toast('Respaldo exportado','ok');
+    var bb=gId('banner-backup'); if(bb)bb.style.display='none';
+    toast('Respaldo exportado · '+r[0].length+' facturas, '+r[5].length+' cierres','ok');
+  }).catch(function(e){
+    console.error('Error al exportar respaldo:',e);
+    toast('No se pudo hacer el respaldo: '+(e&&e.message?e.message:'error desconocido')+'. Cierra otras pestañas de la app y recarga.','err');
   });
 }
 /* [MEJORA 4] Recordatorio de respaldo semanal */
