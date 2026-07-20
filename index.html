@@ -2573,18 +2573,17 @@ function calcularArqueoCaja(fecha){
   return Promise.all([dbGetAll(STORE_FINANZAS),dbGetAll(STORE_FACTURAS),obtenerUltimoCierre()]).then(function(r){
     var movs=r[0], facturas=r[1], ultimoCierre=r[2];
     var idsF={}; facturas.forEach(function(f){ idsF[f.id]=true; });
-    /* punto de arranque: día siguiente al último cierre (o desde siempre si no hay cierres) */
-    var desdeCierre = ultimoCierre ? diaSiguiente(ultimoCierre.fecha_hasta) : null;
-    var saldoBaseCierre = ultimoCierre ? (Number(ultimoCierre.saldo_final && ultimoCierre.saldo_final.caja)||0) : 0;
-    /* solo movimientos de caja válidos */
+    /* solo movimientos de caja válidos (con o sin fecha) */
     var mvCaja = movs.filter(function(m){
-      return m.cuenta==='caja' && !(m.facturaId && !idsF[m.facturaId]) && m.fecha;
+      return m.cuenta==='caja' && !(m.facturaId && !idsF[m.facturaId]);
     });
-    /* saldo inicial del día = saldo del cierre + movimientos desde el cierre hasta el día ANTERIOR */
-    var saldoInicial = saldoBaseCierre;
+    /* SALDO INICIAL DEL DÍA = suma de TODOS los movimientos reales de caja con fecha anterior al día.
+       Se calcula igual que Finanzas/Resumen (sumando movimientos, no la foto del cierre), para que
+       los saldos siempre coincidan aunque se hayan editado facturas de meses ya cerrados.
+       Los movimientos sin fecha se cuentan como saldo de arranque (histórico previo). */
+    var saldoInicial = 0;
     mvCaja.forEach(function(m){
-      if(desdeCierre && m.fecha < desdeCierre) return; /* ya está dentro del saldo del cierre */
-      if(m.fecha >= fecha) return; /* es de hoy o futuro, no cuenta para el inicial */
+      if(m.fecha && m.fecha >= fecha) return; /* es de hoy o futuro, no cuenta para el inicial */
       saldoInicial += (m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);
     });
     /* movimientos del día exacto */
@@ -2597,7 +2596,7 @@ function calcularArqueoCaja(fecha){
     var saldoDia = totalVentas - totalGastos;
     return {fecha:fecha, saldoInicial:saldoInicial, ventas:ventas, gastos:gastos,
       totalVentas:totalVentas, totalGastos:totalGastos, saldoDia:saldoDia,
-      saldoGeneral:saldoInicial+saldoDia, desdeCierre:desdeCierre, ultimoCierre:ultimoCierre};
+      saldoGeneral:saldoInicial+saldoDia, ultimoCierre:ultimoCierre};
   });
 }
 function renderCaja(){
