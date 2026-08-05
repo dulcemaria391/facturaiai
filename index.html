@@ -2660,13 +2660,16 @@ function calcularArqueoCaja(fecha){
     var mvCaja = movs.filter(function(m){
       return m.cuenta==='caja' && !(m.facturaId && !idsF[m.facturaId]);
     });
+    /* normaliza cualquier fecha a solo el día (YYYY-MM-DD), por si vino con hora */
+    function soloDia(f){ return f?String(f).slice(0,10):''; }
+    var fechaDia=soloDia(fecha);
     /* SALDO INICIAL DEL DÍA = suma de TODOS los movimientos reales de caja con fecha anterior al día.
        Se calcula igual que Finanzas/Resumen (sumando movimientos, no la foto del cierre), para que
        los saldos siempre coincidan aunque se hayan editado facturas de meses ya cerrados.
        Los movimientos sin fecha se cuentan como saldo de arranque (histórico previo). */
     var saldoInicial = 0;
     mvCaja.forEach(function(m){
-      if(m.fecha && m.fecha >= fecha) return; /* es de hoy o futuro, no cuenta para el inicial */
+      if(m.fecha && soloDia(m.fecha) >= fechaDia) return; /* es de hoy o futuro, no cuenta para el inicial */
       saldoInicial += (m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);
     });
     /* helper: desglose billete/moneda de un movimiento. Si no tiene el dato (histórico),
@@ -2676,12 +2679,12 @@ function calcularArqueoCaja(fecha){
     /* saldo inicial partido en billete y moneda */
     var siBillete=0, siMoneda=0;
     mvCaja.forEach(function(m){
-      if(m.fecha && m.fecha >= fecha) return;
+      if(m.fecha && soloDia(m.fecha) >= fechaDia) return;
       var signo=(m.tipo==='ingreso'?1:-1);
       siBillete += signo*bilDe(m); siMoneda += signo*monDe(m);
     });
-    /* movimientos del día exacto */
-    var delDia = mvCaja.filter(function(m){ return m.fecha===fecha; })
+    /* movimientos del día exacto (comparando solo el día, tolerando fechas con hora) */
+    var delDia = mvCaja.filter(function(m){ return soloDia(m.fecha)===fechaDia; })
       .sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
     var ventas = delDia.filter(function(m){ return m.tipo==='ingreso'; });
     var gastos = delDia.filter(function(m){ return m.tipo==='egreso'; });
