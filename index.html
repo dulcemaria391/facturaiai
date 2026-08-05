@@ -1082,6 +1082,45 @@ function selectorBancoHTML(prefijo,sel){
 function onCambioBancoSel(prefijo){ var w=gId(prefijo+'-banco-nuevo-wrap'); if(w)w.style.display=(gId(prefijo+'-banco').value==='__nuevo__')?'block':'none'; }
 function leerBanco(prefijo){ var sel=gId(prefijo+'-banco').value; if(sel==='__nuevo__'){ var nuevo=gId(prefijo+'-banco-nuevo').value.trim()||'Sin especificar'; guardarBancoNuevo(nuevo); return nuevo; } return sel; }
 
+/* ===== EFECTIVO: desglose billete / moneda =====
+   Campos opcionales. Si no se llenan, todo el monto cuenta como billete (regla acordada).
+   'contexto' es el prefijo de los ids (ej 'in', 'cb', 'gs'). */
+function bloqueBilleteMonedaHTML(prefijo){
+  return '<div id="'+prefijo+'-bm-wrap" style="margin-top:10px">'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">'+
+      '<input type="checkbox" id="'+prefijo+'-bm-on" onchange="onToggleBM(\''+prefijo+'\')" style="width:auto;margin:0"> Dividir en billete y moneda</label>'+
+    '<div id="'+prefijo+'-bm-campos" style="display:none;margin-top:8px"><div class="fg c2">'+
+      '<div><label>💵 Billete</label><input type="number" id="'+prefijo+'-billete" placeholder="0" oninput="onCalcBM(\''+prefijo+'\')"></div>'+
+      '<div><label>🪙 Moneda</label><input type="number" id="'+prefijo+'-moneda" placeholder="0" oninput="onCalcBM(\''+prefijo+'\')"></div>'+
+    '</div><div id="'+prefijo+'-bm-aviso" style="font-size:.74rem;color:var(--gris);margin-top:4px"></div></div></div>';
+}
+function onToggleBM(prefijo){
+  var on=gId(prefijo+'-bm-on').checked;
+  gId(prefijo+'-bm-campos').style.display=on?'block':'none';
+  if(on)onCalcBM(prefijo);
+}
+/* muestra si billete+moneda cuadra con el monto */
+function onCalcBM(prefijo){
+  var montoEl=gId(prefijo+'-monto'); var monto=montoEl?(Number(montoEl.value)||0):0;
+  var bil=Number(gId(prefijo+'-billete').value)||0;
+  var mon=Number(gId(prefijo+'-moneda').value)||0;
+  var av=gId(prefijo+'-bm-aviso'); if(!av)return;
+  if(monto>0 && (bil+mon)!==monto){
+    av.innerHTML='⚠ Billete + moneda ('+fmtMoneda(bil+mon)+') no coincide con el monto ('+fmtMoneda(monto)+').';
+    av.style.color='var(--rojo)';
+  } else { av.innerHTML='✓ Billete + moneda = '+fmtMoneda(bil+mon); av.style.color='var(--verde)'; }
+}
+/* devuelve {billete, moneda} a guardar en el movimiento. Si no se dividió, todo va a billete. */
+function leerBilleteMoneda(prefijo,monto){
+  var on=gId(prefijo+'-bm-on')&&gId(prefijo+'-bm-on').checked;
+  if(!on) return {billete:monto,moneda:0};
+  var bil=Number(gId(prefijo+'-billete').value)||0;
+  var mon=Number(gId(prefijo+'-moneda').value)||0;
+  /* si dividió pero no cuadra o dejó vacío, ajusta: lo que falte va a billete */
+  if(bil+mon!==monto){ bil=monto-mon; if(bil<0){bil=0;} }
+  return {billete:bil,moneda:mon};
+}
+
 function recolectarFactura(){
   var productos=[];
   document.querySelectorAll('#tbody-lineas tr').forEach(function(tr){
@@ -2318,22 +2357,29 @@ function abrirCobro(movId){
         '<option value="consignacion">🏦 Consignación (a Bancos)</option></select></div>'+
       '<div id="cobro-banco-wrap" style="display:none;margin-top:10px"><label>Banco</label>'+
         selectorBancoHTML('cobro')+'</div>'+
+      '<input type="hidden" id="cobro-monto" value="'+(Number(m.monto)||0)+'">'+
+      bloqueBilleteMonedaHTML('cobro')+
       '<div class="btn-row"><button class="btn btn-success btn-sm" onclick="confirmarCobro(\''+movId+'\')">Confirmar pago</button>'+
       '<button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Cancelar</button></div>');
   });
 }
-function onCambioCobro(){ gId('cobro-banco-wrap').style.display=(gId('cobro-medio').value==='consignacion')?'block':'none'; }
+function onCambioCobro(){
+  var esConsig=(gId('cobro-medio').value==='consignacion');
+  gId('cobro-banco-wrap').style.display=esConsig?'block':'none';
+  var bm=gId('cobro-bm-wrap'); if(bm)bm.style.display=esConsig?'none':'block';
+}
 function confirmarCobro(movId){
   var medio=gId('cobro-medio').value;
   var banco=(medio==='consignacion')?leerBanco('cobro'):null;
   dbGet(STORE_FINANZAS,movId).then(function(m){
     if(!m)return;
+    var bm=(medio==='efectivo')?leerBilleteMoneda('cobro',Number(m.monto)||0):{billete:0,moneda:0};
     var t=DB.transaction([STORE_FINANZAS,STORE_FACTURAS],'readwrite');
     var sFi=t.objectStore(STORE_FINANZAS), sF=t.objectStore(STORE_FACTURAS);
     /* eliminar el pendiente y crear ingreso a caja o bancos */
     sFi.delete(movId);
     sFi.put({id:uid(),cuenta:(medio==='efectivo'?'caja':'bancos'),tipo:'ingreso',monto:m.monto,fecha:hoyISO(),
-      facturaId:m.facturaId,banco:banco,ref:'Pago crédito '+(m.ref||'').replace('Crédito ',''),cliente:m.cliente,ts:Date.now()});
+      facturaId:m.facturaId,banco:banco,ref:'Pago crédito '+(m.ref||'').replace('Crédito ',''),cliente:m.cliente,billete:bm.billete,moneda:bm.moneda,ts:Date.now()});
     /* marcar factura como pagada */
     if(m.facturaId){ var gf=sF.get(m.facturaId); gf.onsuccess=function(){ var f=gf.result; if(f){ f.pagada=true; f.formaPagoFinal=medio; sF.put(f); } }; }
     t.oncomplete=function(){ toast('Pago registrado','ok'); cerrarModal(); refrescarTodo(); };
@@ -2347,7 +2393,7 @@ function confirmarCobro(movId){
 var CAT_INGRESO=['Aporte del dueño','Préstamo recibido','Devolución de proveedor','Venta de activo','Otro ingreso'];
 function optsCatIngreso(){ return CAT_INGRESO.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('')+'<option value="__nueva__">➕ Otro (escribir)</option>'; }
 function onCambioCatIngreso(){ gId('in-cat-nueva-wrap').style.display=(gId('in-cat').value==='__nueva__')?'block':'none'; }
-function onCambioDestinoIngreso(){ gId('in-banco-wrap').style.display=(gId('in-destino').value==='bancos')?'block':'none'; }
+function onCambioDestinoIngreso(){ gId('in-banco-wrap').style.display=(gId('in-destino').value==='bancos')?'block':'none'; var bm=gId('in-bm-wrap'); if(bm)bm.style.display=(gId('in-destino').value==='caja')?'block':'none'; }
 function abrirIngreso(){
   abrirModal('<h3>➕ Ingreso (no es venta)</h3>'+
     '<div><label>Tipo de ingreso</label><select id="in-cat" onchange="onCambioCatIngreso()">'+optsCatIngreso()+'</select></div>'+
@@ -2355,8 +2401,9 @@ function abrirIngreso(){
     '<div style="margin-top:10px"><label>¿A dónde entra?</label><select id="in-destino" onchange="onCambioDestinoIngreso()">'+
       '<option value="caja">💵 Caja (efectivo)</option><option value="bancos">🏦 Bancos</option></select></div>'+
     '<div id="in-banco-wrap" style="display:none;margin-top:10px"><label>Banco</label>'+selectorBancoHTML('in')+'</div>'+
-    '<div class="fg c2" style="margin-top:10px"><div><label>Monto</label><input type="number" id="in-monto" placeholder="0"></div>'+
+    '<div class="fg c2" style="margin-top:10px"><div><label>Monto</label><input type="number" id="in-monto" placeholder="0" oninput="onCalcBM(\'in\')"></div>'+
     '<div><label>Detalle (opcional)</label><input type="text" id="in-detalle" placeholder="Ej: aporte para insumos"></div></div>'+
+    bloqueBilleteMonedaHTML('in')+
     '<div class="btn-row"><button class="btn btn-success btn-sm" onclick="confirmarIngreso()">Registrar ingreso</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Cancelar</button></div>');
 }
@@ -2368,7 +2415,8 @@ function confirmarIngreso(){
   var monto=Number(gId('in-monto').value)||0;
   var detalle=gId('in-detalle').value.trim();
   if(monto<=0){ toast('Monto inválido','err'); return; }
-  dbPut(STORE_FINANZAS,{id:uid(),cuenta:destino,tipo:'ingreso',clase:'otro_ingreso',categoria:categoria,monto:monto,fecha:hoyISO(),facturaId:null,banco:banco,ref:detalle||categoria,cliente:null,ts:Date.now()})
+  var bm=(destino==='caja')?leerBilleteMoneda('in',monto):{billete:0,moneda:0};
+  dbPut(STORE_FINANZAS,{id:uid(),cuenta:destino,tipo:'ingreso',clase:'otro_ingreso',categoria:categoria,monto:monto,fecha:hoyISO(),facturaId:null,banco:banco,ref:detalle||categoria,cliente:null,billete:bm.billete,moneda:bm.moneda,ts:Date.now()})
     .then(function(){ toast('Ingreso registrado','ok'); cerrarModal(); refrescarTodo(); });
 }
 
@@ -2403,22 +2451,29 @@ function abrirPagoCuenta(movId){
         '<option value="caja">💵 Caja (efectivo)</option><option value="bancos">🏦 Bancos</option></select></div>'+
       '<div id="pc-banco-wrap" style="display:none;margin-top:10px"><label>Banco</label>'+selectorBancoHTML('pc')+'</div>'+
       '<div style="margin-top:10px">'+bloqueClaseHTML('pc')+'</div>'+
+      '<input type="hidden" id="pc-monto" value="'+(Number(m.monto)||0)+'">'+
+      bloqueBilleteMonedaHTML('pc')+
       '<div class="btn-row"><button class="btn btn-success btn-sm" onclick="confirmarPagoCuenta(\''+movId+'\')">Confirmar pago</button>'+
       '<button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Cancelar</button></div>');
   });
 }
-function onCambioPagoCuenta(){ gId('pc-banco-wrap').style.display=(gId('pc-medio').value==='bancos')?'block':'none'; }
+function onCambioPagoCuenta(){
+  var esBanco=(gId('pc-medio').value==='bancos');
+  gId('pc-banco-wrap').style.display=esBanco?'block':'none';
+  var bm=gId('pc-bm-wrap'); if(bm)bm.style.display=esBanco?'none':'block';
+}
 function confirmarPagoCuenta(movId){
   var medio=gId('pc-medio').value;
   var banco=(medio==='bancos')?leerBanco('pc'):null;
   var cl=leerClasificacion('pc');
   dbGet(STORE_FINANZAS,movId).then(function(m){
     if(!m)return;
+    var bm=(medio==='caja')?leerBilleteMoneda('pc',Number(m.monto)||0):{billete:0,moneda:0};
     var t=DB.transaction([STORE_FINANZAS],'readwrite'); var sFi=t.objectStore(STORE_FINANZAS);
     /* borra la deuda pendiente y crea el egreso real con su clasificación */
     sFi.delete(movId);
     sFi.put({id:uid(),cuenta:(medio==='caja'?'caja':'bancos'),tipo:'egreso',clase:cl.clase,categoria:cl.categoria,rubro:cl.rubro,producto:cl.producto,
-      monto:m.monto,fecha:hoyISO(),facturaId:null,banco:banco,ref:'Pago a '+(m.proveedor||'')+(m.ref?' · '+m.ref:''),cliente:null,ts:Date.now()});
+      monto:m.monto,fecha:hoyISO(),facturaId:null,banco:banco,ref:'Pago a '+(m.proveedor||'')+(m.ref?' · '+m.ref:''),cliente:null,billete:bm.billete,moneda:bm.moneda,ts:Date.now()});
     t.oncomplete=function(){ toast('Deuda pagada','ok'); cerrarModal(); refrescarTodo(); };
     t.onerror=function(){ toast('Error al pagar','err'); };
   });
@@ -2473,8 +2528,9 @@ function leerClasificacion(prefijo){
 function abrirGastoCaja(){
   abrirModal('<h3>➖ Salida de caja</h3>'+
     bloqueClaseHTML('gc')+
-    '<div class="fg c2" style="margin-top:10px"><div><label>Monto</label><input type="number" id="gc-monto" placeholder="0"></div>'+
+    '<div class="fg c2" style="margin-top:10px"><div><label>Monto</label><input type="number" id="gc-monto" placeholder="0" oninput="onCalcBM(\'gc\')"></div>'+
     '<div><label>Detalle (opcional)</label><input type="text" id="gc-concepto" placeholder="Ej: 5 bultos"></div></div>'+
+    bloqueBilleteMonedaHTML('gc')+
     '<div class="btn-row"><button class="btn btn-danger btn-sm" onclick="confirmarGasto()">Registrar salida</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="cerrarModal()">Cancelar</button></div>');
 }
@@ -2483,7 +2539,8 @@ function confirmarGasto(){
   var cl=leerClasificacion('gc');
   var detalle=gId('gc-concepto').value.trim();
   if(monto<=0){ toast('Monto inválido','err'); return; }
-  dbPut(STORE_FINANZAS,{id:uid(),cuenta:'caja',tipo:'egreso',clase:cl.clase,categoria:cl.categoria,rubro:cl.rubro,producto:cl.producto,monto:monto,fecha:hoyISO(),facturaId:null,banco:null,ref:detalle||cl.rubro,cliente:null,ts:Date.now()})
+  var bm=leerBilleteMoneda('gc',monto);
+  dbPut(STORE_FINANZAS,{id:uid(),cuenta:'caja',tipo:'egreso',clase:cl.clase,categoria:cl.categoria,rubro:cl.rubro,producto:cl.producto,monto:monto,fecha:hoyISO(),facturaId:null,banco:null,ref:detalle||cl.rubro,cliente:null,billete:bm.billete,moneda:bm.moneda,ts:Date.now()})
     .then(function(){ toast('Salida registrada','ok'); cerrarModal(); refrescarTodo(); });
 }
 
@@ -2586,6 +2643,17 @@ function calcularArqueoCaja(fecha){
       if(m.fecha && m.fecha >= fecha) return; /* es de hoy o futuro, no cuenta para el inicial */
       saldoInicial += (m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);
     });
+    /* helper: desglose billete/moneda de un movimiento. Si no tiene el dato (histórico),
+       todo el monto cuenta como billete (regla acordada). */
+    function bilDe(m){ return (m.billete!=null||m.moneda!=null) ? (Number(m.billete)||0) : (Number(m.monto)||0); }
+    function monDe(m){ return (m.billete!=null||m.moneda!=null) ? (Number(m.moneda)||0) : 0; }
+    /* saldo inicial partido en billete y moneda */
+    var siBillete=0, siMoneda=0;
+    mvCaja.forEach(function(m){
+      if(m.fecha && m.fecha >= fecha) return;
+      var signo=(m.tipo==='ingreso'?1:-1);
+      siBillete += signo*bilDe(m); siMoneda += signo*monDe(m);
+    });
     /* movimientos del día exacto */
     var delDia = mvCaja.filter(function(m){ return m.fecha===fecha; })
       .sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
@@ -2594,9 +2662,18 @@ function calcularArqueoCaja(fecha){
     var totalVentas = ventas.reduce(function(s,m){ return s+(Number(m.monto)||0); },0);
     var totalGastos = gastos.reduce(function(s,m){ return s+(Number(m.monto)||0); },0);
     var saldoDia = totalVentas - totalGastos;
+    /* billete/moneda del día y saldo general partido */
+    var ventasBillete=ventas.reduce(function(s,m){return s+bilDe(m);},0);
+    var ventasMoneda=ventas.reduce(function(s,m){return s+monDe(m);},0);
+    var gastosBillete=gastos.reduce(function(s,m){return s+bilDe(m);},0);
+    var gastosMoneda=gastos.reduce(function(s,m){return s+monDe(m);},0);
+    var saldoBillete=siBillete+ventasBillete-gastosBillete;
+    var saldoMoneda=siMoneda+ventasMoneda-gastosMoneda;
     return {fecha:fecha, saldoInicial:saldoInicial, ventas:ventas, gastos:gastos,
       totalVentas:totalVentas, totalGastos:totalGastos, saldoDia:saldoDia,
-      saldoGeneral:saldoInicial+saldoDia, ultimoCierre:ultimoCierre};
+      saldoGeneral:saldoInicial+saldoDia, ultimoCierre:ultimoCierre,
+      siBillete:siBillete, siMoneda:siMoneda, saldoBillete:saldoBillete, saldoMoneda:saldoMoneda,
+      bilDe:bilDe, monDe:monDe};
   });
 }
 function renderCaja(){
@@ -2619,8 +2696,10 @@ function renderCaja(){
     /* ventas del día, una por una */
     gId('caja-ventas').innerHTML=a.ventas.length?(
       a.ventas.map(function(m){
+        var tieneBM=(m.billete!=null||m.moneda!=null)&&(Number(m.moneda)||0)>0;
+        var bm=tieneBM?'<br><span style="font-size:.72rem;color:var(--gris)">💵 '+fmtMoneda(a.bilDe(m))+' · 🪙 '+fmtMoneda(a.monDe(m))+'</span>':'';
         return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
-          '<span>⬆️ '+esc(m.ref||'Ingreso')+(m.cliente?'<br><span style="font-size:.74rem;color:var(--gris)">👤 '+esc(m.cliente)+'</span>':'')+'</span>'+
+          '<span>⬆️ '+esc(m.ref||'Ingreso')+(m.cliente?'<br><span style="font-size:.74rem;color:var(--gris)">👤 '+esc(m.cliente)+'</span>':'')+bm+'</span>'+
           '<strong style="color:var(--verde)">'+fmtMoneda(m.monto)+'</strong></div>';
       }).join('')+
       '<div class="mini-row" style="padding:11px 0;font-weight:700;border-top:2px solid var(--crema2)"><span>Total ventas ('+a.ventas.length+')</span>'+
@@ -2629,9 +2708,11 @@ function renderCaja(){
     /* gastos del día, uno por uno */
     gId('caja-gastos').innerHTML=a.gastos.length?(
       a.gastos.map(function(m){
+        var tieneBM=(m.billete!=null||m.moneda!=null)&&(Number(m.moneda)||0)>0;
+        var bm=tieneBM?'<br><span style="font-size:.72rem;color:var(--gris)">💵 '+fmtMoneda(a.bilDe(m))+' · 🪙 '+fmtMoneda(a.monDe(m))+'</span>':'';
         return '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)">'+
           '<span>⬇️ '+esc(m.ref||'Salida')+'<br><span style="font-size:.74rem;color:var(--gris)">'+esc(m.categoria||'Sin rubro')+
-          (m.clase==='produccion'?' · producción':' · operativo')+'</span></span>'+
+          (m.clase==='produccion'?' · producción':' · operativo')+'</span>'+bm+'</span>'+
           '<strong style="color:var(--rojo)">'+fmtMoneda(m.monto)+'</strong></div>';
       }).join('')+
       '<div class="mini-row" style="padding:11px 0;font-weight:700;border-top:2px solid var(--crema2)"><span>Total gastos ('+a.gastos.length+')</span>'+
@@ -2646,7 +2727,9 @@ function renderCaja(){
       '<div class="mini-row" style="padding:8px 0;border-bottom:1px solid var(--crema2)"><span>🏁 Saldo inicial</span><strong>+ '+fmtMoneda(a.saldoInicial).replace(/^\$\s/,'$ ')+'</strong></div>'+
       '<div class="mini-row" style="padding:13px 0;font-weight:700;border-top:2px solid var(--caramelo)"><span style="font-size:1rem">💵 SALDO GENERAL</span>'+
       '<strong style="color:var(--caramelo);font-size:1.15rem">'+fmtMoneda(a.saldoGeneral)+'</strong></div>'+
-      '<p style="font-size:.76rem;color:var(--gris);margin-top:8px">Este es el saldo que debe haber físicamente en la caja al cerrar el día, y con el que arranca el día siguiente.</p>';
+      '<div class="mini-row" style="padding:7px 0;border-top:1px dashed var(--crema2)"><span>💵 En billetes</span><strong>'+fmtMoneda(a.saldoBillete)+'</strong></div>'+
+      '<div class="mini-row" style="padding:7px 0"><span>🪙 En monedas</span><strong>'+fmtMoneda(a.saldoMoneda)+'</strong></div>'+
+      '<p style="font-size:.76rem;color:var(--gris);margin-top:8px">Este es el saldo que debe haber físicamente en la caja al cerrar el día, y con el que arranca el día siguiente. Abajo el desglose: cuánto en billetes y cuánto en monedas.</p>';
   });
 }
 function exportArqueoCaja(){
@@ -2656,14 +2739,14 @@ function exportArqueoCaja(){
     filas.push(['SALDO INICIAL DEL DÍA',a.saldoInicial]);
     filas.push([]);
     filas.push(['VENTAS DEL DÍA (EFECTIVO)']);
-    filas.push(['Detalle','Cliente','Monto']);
-    a.ventas.forEach(function(m){ filas.push([m.ref||'Ingreso',m.cliente||'',Number(m.monto)||0]); });
-    filas.push(['TOTAL VENTAS','',a.totalVentas]);
+    filas.push(['Detalle','Cliente','Billete','Moneda','Monto']);
+    a.ventas.forEach(function(m){ filas.push([m.ref||'Ingreso',m.cliente||'',a.bilDe(m),a.monDe(m),Number(m.monto)||0]); });
+    filas.push(['TOTAL VENTAS','','','',a.totalVentas]);
     filas.push([]);
     filas.push(['GASTOS DEL DÍA (EFECTIVO)']);
-    filas.push(['Detalle','Rubro','Clase','Monto']);
-    a.gastos.forEach(function(m){ filas.push([m.ref||'Salida',m.categoria||'',m.clase==='produccion'?'Producción':'Operativo',Number(m.monto)||0]); });
-    filas.push(['TOTAL GASTOS','','',a.totalGastos]);
+    filas.push(['Detalle','Rubro','Clase','Billete','Moneda','Monto']);
+    a.gastos.forEach(function(m){ filas.push([m.ref||'Salida',m.categoria||'',m.clase==='produccion'?'Producción':'Operativo',a.bilDe(m),a.monDe(m),Number(m.monto)||0]); });
+    filas.push(['TOTAL GASTOS','','','','',a.totalGastos]);
     filas.push([]);
     filas.push(['RESUMEN DEL ARQUEO']);
     filas.push(['Entradas del día',a.totalVentas]);
@@ -2671,6 +2754,8 @@ function exportArqueoCaja(){
     filas.push(['Saldo del día (entradas - gastos)',a.saldoDia]);
     filas.push(['Saldo inicial',a.saldoInicial]);
     filas.push(['SALDO GENERAL (para el día siguiente)',a.saldoGeneral]);
+    filas.push(['  → En billetes',a.saldoBillete]);
+    filas.push(['  → En monedas',a.saldoMoneda]);
     generarCSV('arqueo_caja_'+a.fecha,filas);
   });
 }
