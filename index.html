@@ -1181,7 +1181,19 @@ function recolectarFactura(){
     total:Number(gId('f-total').value)||0,
     formaPago:gId('f-pago').value||'efectivo',
     banco:(function(){ if(gId('f-pago').value!=='consignacion')return null; return leerBanco('f'); })(),
-    pagoBM:(function(){ if(gId('f-pago').value!=='efectivo')return null; if(!gId('f-billete'))return null; return leerBilleteMoneda('f',Number(gId('f-total').value)||0); })(),
+    pagoBM:(function(){
+      if(gId('f-pago').value!=='efectivo')return null;
+      var monEl=gId('f-moneda'), bilEl=gId('f-billete');
+      if(!monEl && !bilEl)return null; /* el bloque nunca se mostró */
+      var total=Number(gId('f-total').value)||0;
+      var mon=monEl?(Number(monEl.value)||0):0;
+      var bil=bilEl?(Number(bilEl.value)||0):0;
+      /* si no se escribió moneda, todo es billete (no hace falta que el checkbox esté marcado) */
+      if(mon<=0) return {billete:total,moneda:0};
+      /* hay moneda: si billete+moneda no cuadra con el total, el resto va a billete */
+      if(bil+mon!==total){ bil=total-mon; if(bil<0)bil=0; }
+      return {billete:bil,moneda:mon};
+    })(),
     pagada:(gId('f-pago').value!=='credito'),
     notas:gId('f-notas').value.trim()||null,
     imagen:(gId('prev-img').src&&gId('prev-img').style.display!=='none')?gId('prev-img').src:(prev.imagen||null),
