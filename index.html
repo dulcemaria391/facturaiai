@@ -258,6 +258,7 @@ tbody tr:hover{background:#f5e6c8}
         <div id="f-banco-nuevo-wrap" style="display:none;margin-top:8px"><input type="text" id="f-banco-nuevo" placeholder="Nombre del banco nuevo"></div>
       </div>
     </div>
+    <div id="f-bm-slot"></div>
     <div class="sec-label">Cliente</div>
     <div class="fg c2">
       <div><label>Nombre</label><input type="text" id="f-cli-nombre" placeholder="Nombre del cliente"></div>
@@ -786,8 +787,8 @@ function persistirFacturaTransaccional(factura){
       var fp=factura.formaPago||'efectivo';
       var monto=Number(factura.total)||0;
       if(monto>0){
-        if(fp==='efectivo'){ sFi.put({id:uid(),cuenta:'caja',tipo:'ingreso',monto:monto,fecha:factura.fecha,facturaId:factura.id,banco:null,
-          ref:'Venta '+(factura.numero_factura||''),cliente:(factura.cliente&&factura.cliente.nombre)||null,ts:Date.now()}); }
+        if(fp==='efectivo'){ var bmF=factura.pagoBM||{billete:monto,moneda:0}; sFi.put({id:uid(),cuenta:'caja',tipo:'ingreso',monto:monto,fecha:factura.fecha,facturaId:factura.id,banco:null,
+          ref:'Venta '+(factura.numero_factura||''),cliente:(factura.cliente&&factura.cliente.nombre)||null,billete:bmF.billete,moneda:bmF.moneda,ts:Date.now()}); }
         else if(fp==='consignacion'){ sFi.put({id:uid(),cuenta:'bancos',tipo:'ingreso',monto:monto,fecha:factura.fecha,facturaId:factura.id,banco:factura.banco||'Sin especificar',
           ref:'Venta '+(factura.numero_factura||''),cliente:(factura.cliente&&factura.cliente.nombre)||null,ts:Date.now()}); }
         else if(fp==='credito'){ sFi.put({id:uid(),cuenta:'cobrar',tipo:'pendiente',monto:monto,fecha:factura.fecha,facturaId:factura.id,banco:null,
@@ -1020,7 +1021,15 @@ function mostrarFormularioFactura(d,modo){
   /* poblar lista de bancos y seleccionar el de la factura */
   gId('f-banco').innerHTML=optsBancos(d.banco||null);
   if(d.banco){ gId('f-banco').value=d.banco; }
+  var slotBM=gId('f-bm-slot'); if(slotBM){ slotBM.innerHTML=''; slotBM.style.display='none'; }
   onCambioPago();
+  /* si la factura ya traía desglose de efectivo, precargarlo */
+  if((d.formaPago||'efectivo')==='efectivo' && d.pagoBM && (Number(d.pagoBM.moneda)||0)>0 && gId('f-bm-on')){
+    gId('f-bm-on').checked=true; onToggleBM('f');
+    gId('f-billete').value=Number(d.pagoBM.billete)||0;
+    gId('f-moneda').value=Number(d.pagoBM.moneda)||0;
+    onCalcBMfactura();
+  }
   gId('form-factura').style.display='block';
   gId('form-factura').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -1062,6 +1071,21 @@ function onCambioPago(){
   var fp=gId('f-pago').value;
   gId('f-banco-wrap').style.display=(fp==='consignacion')?'block':'none';
   if(fp==='consignacion'){ poblarBancosVenta(); }
+  /* billete/moneda solo cuando es efectivo (a caja) */
+  var slot=gId('f-bm-slot');
+  if(slot){
+    if(fp==='efectivo'){ if(!slot.innerHTML){ slot.innerHTML=bloqueBilleteMonedaHTML('f'); } slot.style.display='block'; onCalcBMfactura(); }
+    else { slot.style.display='none'; }
+  }
+}
+/* el formulario de factura usa f-total (no f-monto), así que calculamos el desglose contra el total */
+function onCalcBMfactura(){
+  var total=Number(gId('f-total').value)||0;
+  var bil=Number(gId('f-billete').value)||0;
+  var mon=Number(gId('f-moneda').value)||0;
+  var av=gId('f-bm-aviso'); if(!av)return;
+  if(total>0 && (bil+mon)!==total){ av.innerHTML='⚠ Billete + moneda ('+fmtMoneda(bil+mon)+') no coincide con el total ('+fmtMoneda(total)+').'; av.style.color='var(--rojo)'; }
+  else { av.innerHTML='✓ Billete + moneda = '+fmtMoneda(bil+mon); av.style.color='var(--verde)'; }
 }
 function poblarBancosVenta(){
   var sel=gId('f-banco'); var actual=sel.value;
@@ -1101,7 +1125,7 @@ function onToggleBM(prefijo){
 }
 /* muestra si billete+moneda cuadra con el monto */
 function onCalcBM(prefijo){
-  var montoEl=gId(prefijo+'-monto'); var monto=montoEl?(Number(montoEl.value)||0):0;
+  var montoEl=gId(prefijo+'-monto')||gId(prefijo+'-total'); var monto=montoEl?(Number(montoEl.value)||0):0;
   var bil=Number(gId(prefijo+'-billete').value)||0;
   var mon=Number(gId(prefijo+'-moneda').value)||0;
   var av=gId(prefijo+'-bm-aviso'); if(!av)return;
@@ -1112,7 +1136,8 @@ function onCalcBM(prefijo){
 }
 /* devuelve {billete, moneda} a guardar en el movimiento. Si no se dividió, todo va a billete. */
 function leerBilleteMoneda(prefijo,monto){
-  var on=gId(prefijo+'-bm-on')&&gId(prefijo+'-bm-on').checked;
+  var chk=gId(prefijo+'-bm-on');
+  var on=chk&&chk.checked;
   if(!on) return {billete:monto,moneda:0};
   var bil=Number(gId(prefijo+'-billete').value)||0;
   var mon=Number(gId(prefijo+'-moneda').value)||0;
@@ -1150,6 +1175,7 @@ function recolectarFactura(){
     total:Number(gId('f-total').value)||0,
     formaPago:gId('f-pago').value||'efectivo',
     banco:(function(){ if(gId('f-pago').value!=='consignacion')return null; return leerBanco('f'); })(),
+    pagoBM:(function(){ if(gId('f-pago').value!=='efectivo')return null; if(!gId('f-billete'))return null; return leerBilleteMoneda('f',Number(gId('f-total').value)||0); })(),
     pagada:(gId('f-pago').value!=='credito'),
     notas:gId('f-notas').value.trim()||null,
     imagen:(gId('prev-img').src&&gId('prev-img').style.display!=='none')?gId('prev-img').src:(prev.imagen||null),
