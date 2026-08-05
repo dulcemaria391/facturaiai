@@ -482,6 +482,12 @@ tbody tr:hover{background:#f5e6c8}
     <div class="card-header"><h2>🧮 Resumen del arqueo</h2></div>
     <div id="caja-resumen"></div>
   </div>
+  <div class="card">
+    <div class="card-header"><h2>🔍 Diagnóstico de monedas</h2></div>
+    <p style="font-size:.8rem;color:var(--gris);margin-bottom:10px">Muestra TODOS los movimientos de caja que tienen monedas registradas, con su fecha y detalle. Sirve para encontrar saldos de moneda que no cuadran. Solo muestra, no borra.</p>
+    <div class="btn-row"><button class="btn btn-ghost btn-sm" onclick="diagnosticoMonedas()">Ver movimientos con moneda</button></div>
+    <div id="caja-diag" style="margin-top:12px"></div>
+  </div>
 </section>
 
 <!-- ===================== GASTOS ===================== -->
@@ -2759,6 +2765,39 @@ function renderCaja(){
       '<div class="mini-row" style="padding:7px 0;border-top:1px dashed var(--crema2)"><span>💵 En billetes</span><strong>'+fmtMoneda(a.saldoBillete)+'</strong></div>'+
       '<div class="mini-row" style="padding:7px 0"><span>🪙 En monedas</span><strong>'+fmtMoneda(a.saldoMoneda)+'</strong></div>'+
       '<p style="font-size:.76rem;color:var(--gris);margin-top:8px">Este es el saldo que debe haber físicamente en la caja al cerrar el día, y con el que arranca el día siguiente. Abajo el desglose: cuánto en billetes y cuánto en monedas.</p>';
+  });
+}
+/* Diagnóstico: lista todos los movimientos de caja con su billete/moneda, para hallar saldos que no cuadran */
+function diagnosticoMonedas(){
+  return Promise.all([dbGetAll(STORE_FINANZAS),dbGetAll(STORE_FACTURAS)]).then(function(r){
+    var movs=r[0], facturas=r[1]; var idsF={}; facturas.forEach(function(f){ idsF[f.id]=true; });
+    var mvCaja=movs.filter(function(m){ return m.cuenta==='caja' && !(m.facturaId && !idsF[m.facturaId]); });
+    mvCaja.sort(function(a,b){ return (String(a.fecha||'')).localeCompare(String(b.fecha||'')); });
+    function bilDe(m){ return (m.billete!=null||m.moneda!=null) ? (Number(m.billete)||0) : (Number(m.monto)||0); }
+    function monDe(m){ return (m.billete!=null||m.moneda!=null) ? (Number(m.moneda)||0) : 0; }
+    var totalMoneda=0, totalBillete=0, huerfanos=0;
+    /* también detectar movimientos huérfanos (factura borrada) que aún suman */
+    var todosCaja=movs.filter(function(m){ return m.cuenta==='caja'; });
+    todosCaja.forEach(function(m){ if(m.facturaId && !idsF[m.facturaId])huerfanos++; });
+    var filas=mvCaja.map(function(m){
+      var mon=monDe(m), bil=bilDe(m); var signo=(m.tipo==='ingreso'?1:-1);
+      totalMoneda+=signo*mon; totalBillete+=signo*bil;
+      var tieneMoneda=mon>0;
+      return '<div class="mini-row" style="padding:7px 0;border-bottom:1px solid var(--crema2)'+(tieneMoneda?';background:#fffbe6':'')+'">'+
+        '<span>'+(m.tipo==='ingreso'?'⬆️':'⬇️')+' '+esc(String(m.fecha||'sin fecha'))+' · '+esc(m.ref||m.categoria||'')+
+        '<br><span style="font-size:.72rem;color:var(--gris)">💵 '+fmtMoneda(bil)+' · 🪙 '+fmtMoneda(mon)+(m.facturaId?' · factura':'')+'</span></span>'+
+        '<strong style="color:'+(m.tipo==='ingreso'?'var(--verde)':'var(--rojo)')+'">'+fmtMoneda(m.monto)+'</strong></div>';
+    }).join('');
+    var conMoneda=mvCaja.filter(function(m){return monDe(m)>0;});
+    var html='<div style="font-size:.82rem;margin-bottom:10px;padding:10px;background:var(--crema2);border-radius:8px">'+
+      '<div>Total en monedas (calculado): <strong>'+fmtMoneda(totalMoneda)+'</strong></div>'+
+      '<div>Total en billetes (calculado): <strong>'+fmtMoneda(totalBillete)+'</strong></div>'+
+      '<div>Movimientos con moneda registrada: <strong>'+conMoneda.length+'</strong></div>'+
+      (huerfanos>0?'<div style="color:var(--rojo);margin-top:4px">⚠ Hay '+huerfanos+' movimiento(s) de caja huérfano(s) (de facturas borradas). Ve a 💰 Finanzas para que se limpien solos.</div>':'')+
+      '</div>';
+    html+=filas||'<p style="color:var(--gris);font-size:.84rem;text-align:center;padding:10px">No hay movimientos de caja.</p>';
+    if(conMoneda.length===0){ html+='<p style="font-size:.8rem;color:var(--gris);margin-top:8px">Ningún movimiento tiene monedas registradas. Si el arqueo muestra saldo en monedas, revisa arriba el total calculado — debería ser $0.</p>'; }
+    gId('caja-diag').innerHTML=html;
   });
 }
 function exportArqueoCaja(){
