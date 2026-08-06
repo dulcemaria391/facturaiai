@@ -1030,9 +1030,9 @@ function mostrarFormularioFactura(d,modo){
   var slotBM=gId('f-bm-slot'); if(slotBM){ slotBM.innerHTML=''; slotBM.style.display='none'; }
   onCambioPago();
   /* si la factura ya traía desglose de efectivo, precargarlo */
-  if((d.formaPago||'efectivo')==='efectivo' && d.pagoBM && (Number(d.pagoBM.moneda)||0)>0 && gId('f-bm-on')){
-    gId('f-bm-on').checked=true; onToggleBM('f');
-    gId('f-billete').value=Number(d.pagoBM.billete)||0;
+  if((d.formaPago||'efectivo')==='efectivo' && d.pagoBM && (Number(d.pagoBM.moneda)||0)>0 && gId('f-moneda')){
+    if(gId('f-bm-on'))gId('f-bm-on').checked=true;
+    if(gId('f-bm-campos'))gId('f-bm-campos').style.display='block';
     gId('f-moneda').value=Number(d.pagoBM.moneda)||0;
     onCalcBMfactura();
   }
@@ -1080,18 +1080,22 @@ function onCambioPago(){
   /* billete/moneda solo cuando es efectivo (a caja) */
   var slot=gId('f-bm-slot');
   if(slot){
-    if(fp==='efectivo'){ if(!slot.innerHTML){ slot.innerHTML=bloqueBilleteMonedaHTML('f'); } slot.style.display='block'; onCalcBMfactura(); }
+    if(fp==='efectivo'){ if(!slot.innerHTML){ slot.innerHTML=bloqueBilleteMonedaFacturaHTML(); } slot.style.display='block'; onCalcBMfactura(); }
     else { slot.style.display='none'; }
   }
 }
-/* el formulario de factura usa f-total (no f-monto), así que calculamos el desglose contra el total */
+/* el formulario de factura usa f-total (no f-monto), así que calculamos el desglose contra el total.
+   Al escribir la moneda, el billete se autocompleta (total − moneda) para que siempre cuadre. */
 function onCalcBMfactura(){
   var total=Number(gId('f-total').value)||0;
-  var bil=Number(gId('f-billete').value)||0;
   var mon=Number(gId('f-moneda').value)||0;
+  /* autocompletar billete con el resto */
+  if(mon>0 && mon<=total){ gId('f-billete').value=total-mon; }
+  else if(mon===0){ gId('f-billete').value=total; }
+  var bil=Number(gId('f-billete').value)||0;
   var av=gId('f-bm-aviso'); if(!av)return;
   if(total>0 && (bil+mon)!==total){ av.innerHTML='⚠ Billete + moneda ('+fmtMoneda(bil+mon)+') no coincide con el total ('+fmtMoneda(total)+').'; av.style.color='var(--rojo)'; }
-  else { av.innerHTML='✓ Billete + moneda = '+fmtMoneda(bil+mon); av.style.color='var(--verde)'; }
+  else { av.innerHTML='✓ Billete '+fmtMoneda(bil)+' + moneda '+fmtMoneda(mon)+' = '+fmtMoneda(bil+mon); av.style.color='var(--verde)'; }
 }
 function poblarBancosVenta(){
   var sel=gId('f-banco'); var actual=sel.value;
@@ -1128,6 +1132,21 @@ function onToggleBM(prefijo){
   var on=gId(prefijo+'-bm-on').checked;
   gId(prefijo+'-bm-campos').style.display=on?'block':'none';
   if(on)onCalcBM(prefijo);
+}
+/* bloque billete/moneda para FACTURA: escribes la moneda y el billete se autocalcula (total − moneda) */
+function bloqueBilleteMonedaFacturaHTML(){
+  return '<div id="f-bm-wrap" style="margin-top:10px">'+
+    '<label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">'+
+      '<input type="checkbox" id="f-bm-on" checked onchange="onToggleBMfactura()" style="width:auto;margin:0"> Dividir en billete y moneda</label>'+
+    '<div id="f-bm-campos" style="margin-top:8px"><div class="fg c2">'+
+      '<div><label>🪙 Moneda</label><input type="number" id="f-moneda" placeholder="0" oninput="onCalcBMfactura()"></div>'+
+      '<div><label>💵 Billete (automático)</label><input type="number" id="f-billete" placeholder="0" readonly style="background:var(--crema)"></div>'+
+    '</div><div id="f-bm-aviso" style="font-size:.74rem;color:var(--gris);margin-top:4px"></div></div></div>';
+}
+function onToggleBMfactura(){
+  var on=gId('f-bm-on').checked;
+  gId('f-bm-campos').style.display=on?'block':'none';
+  if(on)onCalcBMfactura(); else { gId('f-moneda').value=''; gId('f-billete').value=''; }
 }
 /* muestra si billete+moneda cuadra con el monto */
 function onCalcBM(prefijo){
