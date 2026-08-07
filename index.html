@@ -172,7 +172,7 @@ tbody tr:hover{background:#f5e6c8}
     <div style="font-weight:600;font-size:.86rem;color:#7a5010" id="banner-backup-txt">Hace tiempo que no respaldas tus datos.</div>
     <div style="font-size:.75rem;color:var(--gris)">Tus datos viven solo en este iPhone. Un respaldo es tu seguro.</div>
   </div>
-  <button class="btn btn-primary btn-sm" onclick="exportarBackup()">⬇ Respaldar ahora</button>
+  <button class="btn btn-primary btn-sm" onclick="exportarBackup(false)">⬇ Respaldar ahora</button>
   <button class="btn btn-ghost btn-sm" onclick="posponerBackup()">Después</button>
 </div>
 <!-- ===================== INICIO ===================== -->
@@ -578,10 +578,16 @@ tbody tr:hover{background:#f5e6c8}
       <button class="btn btn-ghost" onclick="toggleKey()">👁 Ver/ocultar</button>
     </div>
     <div class="sec-label">Datos y respaldo</div>
+    <p style="font-size:.78rem;color:var(--gris);margin-bottom:8px">El respaldo normal (sin imágenes) es liviano y funciona bien en el celular. Guarda todos tus datos: facturas, montos, clientes, inventario, finanzas y cierres. Solo omite las fotos de los recibos.</p>
     <div class="btn-row">
-      <button class="btn btn-ghost btn-sm" onclick="exportarBackup()">⬇ Exportar respaldo JSON</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportarBackup(false)">⬇ Respaldo (recomendado)</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportarBackup(true)">⬇ Respaldo con imágenes</button>
       <button class="btn btn-ghost btn-sm" onclick="document.getElementById('file-backup').click()">⬆ Importar respaldo</button>
       <input type="file" id="file-backup" accept="application/json" style="display:none" onchange="importarBackup(this)">
+    </div>
+    <p style="font-size:.78rem;color:var(--gris);margin:10px 0 8px">Si el respaldo con imágenes pesa mucho, encoge las fotos de tus facturas a un tamaño liviano y legible:</p>
+    <div class="btn-row">
+      <button class="btn btn-ghost btn-sm" onclick="optimizarImagenesExistentes()">🗜 Optimizar imágenes guardadas</button>
     </div>
     <div class="sec-label">Zona peligrosa</div>
     <div class="btn-row">
@@ -852,6 +858,30 @@ function buscarDuplicado(numero){
    MÓDULO 1 · ESCANEO IA
    ============================================================ */
 var scanB64=null, scanData=null;
+var scanThumb=null; /* miniatura legible que se guardará en la factura */
+
+/* genera una miniatura legible: redimensiona a máx 900px de ancho y comprime como JPEG.
+   Reduce el peso de ~2-5 MB a ~80-150 KB, manteniéndose legible. */
+function generarMiniatura(srcDataUrl){
+  return new Promise(function(res){
+    try{
+      var img=new Image();
+      img.onload=function(){
+        var maxW=900;
+        var escala=img.width>maxW?(maxW/img.width):1;
+        var w=Math.round(img.width*escala), h=Math.round(img.height*escala);
+        var cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+        var ctx=cv.getContext('2d');
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img,0,0,w,h);
+        /* calidad 0.7 = buen balance entre legible y liviano */
+        res(cv.toDataURL('image/jpeg',0.7));
+      };
+      img.onerror=function(){ res(srcDataUrl); }; /* si falla, devuelve la original */
+      img.src=srcDataUrl;
+    }catch(e){ res(srcDataUrl); }
+  });
+}
 
 function prevScan(input){
   var f=input.files&&input.files[0]; if(!f)return;
@@ -862,13 +892,16 @@ function prevScan(input){
     scanB64=src.split(',')[1];
     /* deducir media_type real */
     scanB64Mime=(src.match(/^data:(image\/[a-z+]+);/)||[])[1]||'image/jpeg';
+    /* generar la miniatura que se guardará (la completa solo se usa para el escaneo IA) */
+    scanThumb=null;
+    generarMiniatura(src).then(function(mini){ scanThumb=mini; });
   };
   r.readAsDataURL(f);
 }
 var scanB64Mime='image/jpeg';
 
 function limpiarScan(){
-  scanB64=null; scanData=null; FACTURA_EDIT=null;
+  scanB64=null; scanData=null; scanThumb=null; FACTURA_EDIT=null;
   gId('file-scan').value=''; gId('prev-img').src=''; gId('prev-img').style.display='none';
   gId('form-factura').style.display='none';
   gId('al-scan').style.display='none';
@@ -1215,7 +1248,7 @@ function recolectarFactura(){
     })(),
     pagada:(gId('f-pago').value!=='credito'),
     notas:gId('f-notas').value.trim()||null,
-    imagen:(gId('prev-img').src&&gId('prev-img').style.display!=='none')?gId('prev-img').src:(prev.imagen||null),
+    imagen:(scanThumb||((gId('prev-img').src&&gId('prev-img').style.display!=='none')?gId('prev-img').src:(prev.imagen||null))),
     creada:prev.creada||Date.now()
   };
 }
@@ -1724,9 +1757,21 @@ function exportarInventarioCSV(){
   });
 }
 function descargar(nombre,contenido,mime){
-  var blob=new Blob([contenido],{type:mime||'application/octet-stream'});
-  var url=URL.createObjectURL(blob); var a=el('a',{href:url,download:nombre}); document.body.appendChild(a); a.click();
-  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); },100);
+  try{
+    var blob=new Blob([contenido],{type:mime||'application/octet-stream'});
+    var url=URL.createObjectURL(blob);
+    var a=el('a',{href:url,download:nombre}); document.body.appendChild(a); a.click();
+    setTimeout(function(){ try{document.body.removeChild(a);}catch(e){} URL.revokeObjectURL(url); },2000);
+  }catch(e){
+    /* iPhone a veces bloquea la descarga directa: abrir el contenido en pestaña nueva
+       para que el usuario lo guarde con el botón Compartir */
+    try{
+      var b2=new Blob([contenido],{type:mime||'text/plain'});
+      var u2=URL.createObjectURL(b2);
+      window.open(u2,'_blank');
+      toast('Si no se descargó, usa el botón Compartir para guardarlo','info');
+    }catch(e2){ toast('No se pudo descargar en este navegador','err'); }
+  }
 }
 /* helper: convierte filas a CSV y descarga con BOM para Excel.
    Usa punto y coma como separador y coma decimal, que es lo que Excel en español
@@ -3291,19 +3336,51 @@ function dbGetAllSeguro(store){
     }catch(e){ console.warn('Excepción leyendo store',store,e); res([]); }
   });
 }
-function exportarBackup(){
+/* Optimiza las imágenes de facturas ya guardadas: las encoge a miniatura para liberar
+   espacio y que el respaldo funcione. Procesa solo las que están grandes (>~200KB). */
+function optimizarImagenesExistentes(){
+  if(!confirm('Esto encogerá las fotos de tus facturas a un tamaño liviano (legible) para que el respaldo funcione y la app vaya más rápida. No borra ninguna factura. ¿Continuar?'))return;
+  toast('Optimizando imágenes... espera unos segundos','info');
+  dbGetAll(STORE_FACTURAS).then(function(facturas){
+    var conImagen=facturas.filter(function(f){ return f.imagen && f.imagen.length>200000; });
+    if(!conImagen.length){ toast('No hay imágenes grandes que optimizar. Todo liviano ya.','ok'); return; }
+    var i=0, optimizadas=0, ahorroTotal=0;
+    function siguiente(){
+      if(i>=conImagen.length){
+        toast('Listo: '+optimizadas+' imagen(es) optimizadas · '+(ahorroTotal/1048576).toFixed(1)+' MB liberados','ok');
+        return;
+      }
+      var f=conImagen[i++];
+      var pesoAntes=f.imagen.length;
+      generarMiniatura(f.imagen).then(function(mini){
+        if(mini && mini.length<pesoAntes){ ahorroTotal+=(pesoAntes-mini.length); f.imagen=mini; optimizadas++; }
+        return dbPut(STORE_FACTURAS,f);
+      }).then(function(){ setTimeout(siguiente,30); })
+        .catch(function(){ setTimeout(siguiente,30); });
+    }
+    siguiente();
+  });
+}
+function exportarBackup(incluirImagenes){
   if(!DB){ toast('La base de datos no está lista. Recarga la página e intenta de nuevo.','err'); return Promise.resolve(); }
   return Promise.all([dbGetAllSeguro(STORE_FACTURAS),dbGetAllSeguro(STORE_INVENTARIO),dbGetAllSeguro(STORE_CLIENTES),dbGetAllSeguro(STORE_MOVS),dbGetAllSeguro(STORE_FINANZAS),dbGetAllSeguro(STORE_CIERRES)]).then(function(r){
-    var data={facturas:r[0],inventario:r[1],clientes:r[2],movimientos:r[3],finanzas:r[4],cierres:r[5],
+    var facturas=r[0];
+    /* por defecto, respaldo LIGERO: quita las imágenes de las facturas (son lo que hace
+       fallar la descarga en iPhone). Los datos importantes se conservan completos. */
+    if(!incluirImagenes){
+      facturas=facturas.map(function(f){ var c={}; for(var k in f){ if(k!=='imagen')c[k]=f[k]; } c.imagen=null; return c; });
+    }
+    var data={facturas:facturas,inventario:r[1],clientes:r[2],movimientos:r[3],finanzas:r[4],cierres:r[5],
       rubros_produccion:rubrosGuardados('produccion'),rubros_operativo:rubrosGuardados('operativo'),
-      exportado:new Date().toISOString(),app:'FacturaAI',version:4};
-    /* aviso si el respaldo sale sospechosamente vacío */
+      exportado:new Date().toISOString(),app:'FacturaAI',version:4,sinImagenes:!incluirImagenes};
     var totalRegistros=r[0].length+r[1].length+r[2].length+r[3].length+r[4].length+r[5].length;
     if(totalRegistros===0){ toast('⚠ El respaldo salió vacío. Revisa que tus datos estén cargados.','warn'); }
-    descargar('respaldo_facturaai_'+hoyISO()+'.json',JSON.stringify(data,null,2),'application/json');
+    var json=JSON.stringify(data);
+    var tamMB=(json.length/1048576).toFixed(1);
+    descargar('respaldo_facturaai_'+hoyISO()+'.json',json,'application/json');
     localStorage.setItem('facturaai_ultimo_backup',Date.now());
     var bb=gId('banner-backup'); if(bb)bb.style.display='none';
-    toast('Respaldo exportado · '+r[0].length+' facturas, '+r[5].length+' cierres','ok');
+    toast('Respaldo listo ('+tamMB+' MB) · '+r[0].length+' facturas, '+r[5].length+' cierres'+(incluirImagenes?'':' · sin imágenes'),'ok');
   }).catch(function(e){
     console.error('Error al exportar respaldo:',e);
     toast('No se pudo hacer el respaldo: '+(e&&e.message?e.message:'error desconocido')+'. Cierra otras pestañas de la app y recarga.','err');
