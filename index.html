@@ -488,6 +488,12 @@ tbody tr:hover{background:#f5e6c8}
     <div class="btn-row"><button class="btn btn-ghost btn-sm" onclick="diagnosticoMonedas()">Ver movimientos con moneda</button></div>
     <div id="caja-diag" style="margin-top:12px"></div>
   </div>
+  <div class="card">
+    <div class="card-header"><h2>⚖️ ¿Por qué no cuadra Caja con Finanzas?</h2></div>
+    <p style="font-size:.8rem;color:var(--gris);margin-bottom:10px">Compara el saldo del arqueo de hoy con el saldo de Finanzas y te muestra exactamente qué movimientos causan la diferencia (fechas futuras, sin fecha, o de facturas borradas). Solo muestra, no borra.</p>
+    <div class="btn-row"><button class="btn btn-ghost btn-sm" onclick="diagnosticoDiferenciaCaja()">Analizar la diferencia</button></div>
+    <div id="caja-diff" style="margin-top:12px"></div>
+  </div>
 </section>
 
 <!-- ===================== GASTOS ===================== -->
@@ -2844,6 +2850,52 @@ function renderCaja(){
   });
 }
 /* Diagnóstico: lista todos los movimientos de caja con su billete/moneda, para hallar saldos que no cuadran */
+/* Compara el saldo del arqueo (hasta hoy) con el saldo de Finanzas (todo) y muestra
+   exactamente qué movimientos causan la diferencia: fechas futuras, sin fecha, o huérfanos. */
+function diagnosticoDiferenciaCaja(){
+  return Promise.all([dbGetAll(STORE_FINANZAS),dbGetAll(STORE_FACTURAS)]).then(function(r){
+    var movs=r[0], facturas=r[1]; var idsF={}; facturas.forEach(function(f){ idsF[f.id]=true; });
+    var hoy=hoyISO();
+    function soloDia(f){ return f?String(f).slice(0,10):''; }
+    var mvCaja=movs.filter(function(m){ return m.cuenta==='caja'; });
+    /* saldo Finanzas: TODO movimiento de caja no huérfano (como lo hace renderFinanzas) */
+    var saldoFinanzas=0, saldoArqueo=0;
+    var futuros=[], sinFecha=[], huerfanos=[];
+    mvCaja.forEach(function(m){
+      var val=(m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);
+      var esHuerfano=(m.facturaId && !idsF[m.facturaId]);
+      if(esHuerfano){ huerfanos.push(m); return; } /* Finanzas los borra, no cuentan */
+      saldoFinanzas+=val;
+      var d=soloDia(m.fecha);
+      if(!d){ sinFecha.push(m); saldoArqueo+=val; /* sin fecha cuenta como histórico en arqueo */ }
+      else if(d>hoy){ futuros.push(m); /* futuro: Finanzas SÍ lo cuenta, arqueo NO */ }
+      else { saldoArqueo+=val; }
+    });
+    var diferencia=saldoFinanzas-saldoArqueo;
+    var html='<div style="font-size:.84rem;padding:10px;background:var(--crema2);border-radius:8px;margin-bottom:10px">'+
+      '<div>Saldo en <strong>Finanzas</strong>: '+fmtMoneda(saldoFinanzas)+'</div>'+
+      '<div>Saldo en <strong>Caja (arqueo hoy)</strong>: '+fmtMoneda(saldoArqueo)+'</div>'+
+      '<div style="margin-top:4px;font-weight:700;color:'+(Math.abs(diferencia)<1?'var(--verde)':'var(--rojo)')+'">Diferencia: '+fmtMoneda(diferencia)+'</div></div>';
+    if(Math.abs(diferencia)<1 && !futuros.length && !huerfanos.length){
+      html+='<p style="color:var(--verde);font-size:.86rem;padding:8px">✓ Todo cuadra. Los dos saldos coinciden.</p>';
+      gId('caja-diff').innerHTML=html; return;
+    }
+    function bloque(titulo,arr,nota){
+      if(!arr.length)return '';
+      var tot=arr.reduce(function(s,m){return s+(m.tipo==='ingreso'?1:-1)*(Number(m.monto)||0);},0);
+      return '<div class="sec-label" style="margin-top:12px">'+titulo+' · '+fmtMoneda(tot)+'</div>'+
+        '<p style="font-size:.74rem;color:var(--gris);margin-bottom:6px">'+nota+'</p>'+
+        arr.map(function(m){ return '<div class="mini-row" style="padding:7px 0;border-bottom:1px solid var(--crema2);background:#fffbe6">'+
+          '<span>'+(m.tipo==='ingreso'?'⬆️':'⬇️')+' '+esc(String(m.fecha||'SIN FECHA'))+' · '+esc(m.ref||m.categoria||'')+'</span>'+
+          '<strong>'+fmtMoneda(m.monto)+'</strong></div>'; }).join('');
+    }
+    html+=bloque('📅 Con fecha FUTURA',futuros,'Finanzas las cuenta pero el arqueo de hoy no (su fecha aún no llega). Corrige la fecha de estas facturas para que cuadren.');
+    html+=bloque('❓ SIN fecha',sinFecha,'Estos cuentan en ambos, pero conviene ponerles fecha.');
+    html+=bloque('🗑 Huérfanos (factura borrada)',huerfanos,'De facturas que borraste. Entra a 💰 Finanzas y se limpian solos.');
+    if(futuros.length){ html+='<p style="font-size:.8rem;color:var(--rojo);margin-top:10px;font-weight:600">→ La diferencia de '+fmtMoneda(diferencia)+' viene de las facturas con fecha futura. Corrige sus fechas y los saldos cuadrarán.</p>'; }
+    gId('caja-diff').innerHTML=html;
+  });
+}
 function diagnosticoMonedas(){
   return Promise.all([dbGetAll(STORE_FINANZAS),dbGetAll(STORE_FACTURAS)]).then(function(r){
     var movs=r[0], facturas=r[1]; var idsF={}; facturas.forEach(function(f){ idsF[f.id]=true; });
